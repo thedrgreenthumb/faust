@@ -1,0 +1,102 @@
+import("math.lib");
+import("music.lib");
+import("filter.lib");
+import("oscillator.lib");
+import("effect.lib");
+
+
+// ------ Auxiliary ------
+
+//Cross connection
+X = (_,_)<:(!,_,_,!);
+
+//Convert time to samples
+get_delay_length(x) = x*SR:_*0.001;
+
+//Is variable in range
+is_range(min_val, max_val, x) = x>=min_val,x<max_val:*:_;
+
+
+// ------ Mixing and switching ------
+
+//Mixers for multiply number of inputs, range from 0 to N
+mix2(c,x,y) = (1-c)*x + c*y; 
+mix3(val) = _,_,_<:select3(val),select3(val+1):mix2(val-floor(val));
+mix4(val) = _,_,_,_<:select4(val),select4(val+1):mix2(val-floor(val));
+mix5(val) = _,_,_,_,_<:select5(val),select5(val+1):mix2(val - floor(val));
+mix8(val) = _,_,_,_,_,_,_,_<:select8(val),select8(val+1):mix2(val-floor(val));
+
+
+// ------ Coloration filters ------
+
+//One knob coloration fitler, coloration = 0..1
+coloration_filter1(coloration) = _<:(lowshelf(5,(1 - coloration)*12,440),
+	highshelf(5,coloration*12,880)):>_*db2linear(-15);
+
+
+// ------ Modulation plugins structures ------
+ring_modulator(freq, dry_wet) = _<:((1 - dry_wet)*_,(_*osc(freq))*dry_wet):>_;
+
+//Detune, lfo - signal, depth = 0..1
+detune(lfo,depth) = fdelay1s(((lfo+1)*0.5)*depth*samps_max)
+with {
+	samps_max = 400; //SR=48000
+};
+
+flanger(lfo,depth) =_<:_,(-:fdelay(samps_max,((lfo+1)/2)*depth*0.9*samps_max))
+	~*(0.5):_,*(-1) : + : *(0.5)
+with {
+	samps_max = 2048; //SR=48000
+};
+
+//Delay lines based Pitch Shifter, copy-pasted from faust repository, 
+//see ./examples/pitch_shifter.dsp
+transpose (w, x, s, sig)  =
+	fdelay1s(d,sig)*fmin(d/x,1) + fdelay1s(d+w,sig)*(1-fmin(d/x,1))
+with {
+	i = 1 - pow(2, s/12);
+	d = i : (+ : +(w) : fmod(_,w)) ~ _;
+    };
+    
+pitch_shift(val,dry_wet) = _<:_,transpose(4096,2048,val):mix2(dry_wet);
+
+
+// ------ Delay plugins structures ------
+
+//Ping-Pong structure
+pp_delay(time,fb_coef,pp_fb_coef,f_feedback,f_post_delay) = _,_*(1 - pp_fb_coef):
+	(_,X,_:(X:(pp_fb_delay(time, fb_coef*(1 - pp_fb_coef),fb_coef*pp_fb_coef))),
+	(X:(pp_fb_delay(time, fb_coef*(1 - pp_fb_coef),fb_coef*pp_fb_coef))):_,_)~X
+	:>_,_
+	with {
+		flo_delay = fdelay2s; //2 seconds max
+		pp_fb_delay(time,fb_coef,pp_fb_coef) = _+_*pp_fb_coef:
+		(_+_:flo_delay(get_delay_length(time)):f_post_delay)~_*fb_coef:f_feedback;
+	};
+
+//Ducking switcher
+ducking_impl(att, rel, amount) = amp_follower_ud(att,rel):
+	_*amount:_>1:(1 - _):
+	smooth(tau2pole(0.03));
+	
+//Duck switcher
+duck_sw(val) = _,_:(_<:_,ducking_impl(0.05, 0.1, val*44:db2linear)),_:_,_*_:_,_;
+
+
+
+// ------ Emulation ------
+
+//Bits reduction, used at digital delay emulation
+bits_reducing(bits) = _*pow(2,bits):ceil:_/pow(2,bits):lowpass(4,4000);
+
+//Analog delay emulation, typical tape speeds: 
+//9.5,19,38 cm/s : 1.5,3,6 Hz if capstan D = 2 cm
+//Typical arguments:(4000,6,25,-70)
+tape_capstan_emu(band_width, del_osc_freq, del_width, noise_lev_db) = 
+	_:lowpass(4,band_width):
+	_+((noise_lev_db:db2linear:smooth(0.999))*lfnoise0(12000)):
+	fdelay(1024,osc(del_osc_freq):_+1:_/2:_*del_width);
+
+//Analog/digital emulation combination, val = 0..2
+analog_digital(val) = _<:bits_reducing(8),_,tape_capstan_emu(4000,6,25,-70):
+	mix3(val);
