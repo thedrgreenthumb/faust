@@ -22,6 +22,12 @@ get_delay_length(x) = x*SR:_*0.001;
 
 //Selectors for multiply number of inputs (indexing from 0 to N)
 select4(val) = select3(val),_:select2(val == 3); 
+select5(val) = select3(rng1),select2(rng2):select2(rng3)
+	with {
+		rng1 = val;
+		rng2 = val<:(_>=3:_<=4),_-3:_*_:>_;
+		rng3 = val>=3;
+	}; 
 select6(val) = select3(rng1),select3(rng2):select2(rng3)
 	with {
 		rng1 = val;
@@ -50,17 +56,20 @@ select16(val) = select8(rng1),select8(rng2):select2(rng3)
 //Mixers for multiply number of inputs, range from 0 to N
 mix2(c,x,y) = (1-c)*x + c*y; 
 mix3(val) = _,_,_<:select3(val),select3(val+1):mix2(val-floor(val));
-mix4(val) = _,_,_<:select4(val),select4(val+1):mix2(val-floor(val));
-mix8(val) = _,_,_<:select8(val),select8(val+1):mix2(val-floor(val));
+mix4(val) = _,_,_,_<:select4(val),select4(val+1):mix2(val-floor(val));
+mix5(val) = _,_,_,_,_<:select5(val),select5(val+1):mix2(val - floor(val));
+mix8(val) = _,_,_,_,_,_,_,_<:select8(val),select8(val+1):mix2(val-floor(val));
 
 
 
 
 
-//Coloration filter
-coloration_filter(coloration) = _<:(lowshelf(5,(1 - coloration)*12,440),
+//------ Coloration filters ------
+coloration_filter1(coloration) = _<:(lowshelf(5,(1 - coloration)*12,440),
 	highshelf(5,coloration*12,880)):>_*db2linear(-15);
 
+coloration_filter2(lf, hf) = _<:(lowshelf(5,lf*12,440),
+	highshelf(5,hf*12,880)):>_*db2linear(-12);
 
 
 
@@ -113,10 +122,18 @@ schoeders2(fb1, fb2, damp, spread)
 //Bits reduction, used at digital delay emulation
 bits_reducing(bits) = _*pow(2,bits):ceil:_/pow(2,bits):lowpass(4,4000);
 
-//Analog delay emulation, typical tape speeds: 9.5,19,38 cm/s : 1.5,3,6 Hz if capstan D = 2 cm
+//Analog delay emulation, typical tape speeds: 
+//9.5,19,38 cm/s : 1.5,3,6 Hz if capstan D = 2 cm
 //Typical arguments:(4000,6,25,-70)
 tape_capstan_emu(band_width, del_osc_freq, del_width, noise_lev_db) = _:lowpass(4,band_width):
 	_+((noise_lev_db:db2linear:smooth(0.999))*lfnoise0(12000)):fdelay(1024,osc(del_osc_freq):_+1:_/2:_*del_width);
 
 //Analog/digital emulation combination
 analog_digital(val) = _<:bits_reducing(8),@(10),tape_capstan_emu(4000,6,25,-70):mix3(val); 
+
+//------ Combined oscillators ------
+
+//Sine + toothes + noise
+comb_osc1(freq) = _;
+
+
